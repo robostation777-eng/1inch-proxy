@@ -1,4 +1,15 @@
 export default async function handler(req, res) {
+  // 加 CORS headers（支持跨域）
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // 处理预检请求
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   if (req.method !== 'GET') {
     res.status(405).end();
     return;
@@ -21,8 +32,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 2025 年 12 月最新官方 endpoint：加 /swap 和 v6.1
-  const url = `https://api.1inch.dev/swap/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  const url = `https://api.1inch.io/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
