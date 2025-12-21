@@ -21,8 +21,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 正确官方 endpoint（无 /classic/）
-  const url = `https://api.1inch.io/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 2025 年 12 月最新官方 endpoint：加 /swap 和 v6.1
+  const url = `https://api.1inch.dev/swap/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
