@@ -42,8 +42,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 2025 年 12 月最新官方 endpoint (v6.1 + .io 域名)
-  const url = new URL('https://api.1inch.io/v6.1/42161/swap');
+  // 修复路径：移除多余 /swap 前缀（避免双 /swap）
+  const url = new URL('https://api.1inch.dev/v6.1/42161/swap');
   Object.keys(queryParams).forEach(key => {
     if (queryParams[key]) {
       url.searchParams.append(key, queryParams[key]);
