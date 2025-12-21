@@ -6,16 +6,16 @@ export default async function handler(req, res) {
 
   // 更宽松地取出参数，支持 Vercel 有时把 query 变成 array 的情况
   // 同时强制地址转小写（1inch API 要求地址必须小写，否则可能被拒绝或报错）
-  const fromTokenAddress = (Array.isArray(req.query.fromTokenAddress) 
-    ? req.query.fromTokenAddress[0] 
+  const fromTokenAddress = (Array.isArray(req.query.fromTokenAddress)
+    ? req.query.fromTokenAddress[0]
     : req.query.fromTokenAddress || '').toString().toLowerCase().trim();
 
-  const toTokenAddress = (Array.isArray(req.query.toTokenAddress) 
-    ? req.query.toTokenAddress[0] 
+  const toTokenAddress = (Array.isArray(req.query.toTokenAddress)
+    ? req.query.toTokenAddress[0]
     : req.query.toTokenAddress || '').toString().toLowerCase().trim();
 
-  const amount = (Array.isArray(req.query.amount) 
-    ? req.query.amount[0] 
+  const amount = (Array.isArray(req.query.amount)
+    ? req.query.amount[0]
     : req.query.amount || '').toString().trim();
 
   // 校验参数（去掉空字符串的情况）
@@ -24,8 +24,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 构建 1inch URL（chain 已硬编码 42161，完美匹配你的 Arbitrum）
-  const url = `https://api.1inch.dev/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 构建 1inch URL（最新官方 endpoint：api.1inch.io，chain 42161 Arbitrum）
+  const url = `https://api.1inch.io/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
