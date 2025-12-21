@@ -1,14 +1,4 @@
 export default async function handler(req, res) {
-  // CORS 支持 dapp 跨域调用（必加，否则 dapp fetch 失败）
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
   if (req.method !== 'GET') {
     res.status(405).end();
     return;
@@ -31,8 +21,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 官方最新路径（v6.1 + 无额外 /swap 前缀）
-  const url = `https://api.1inch.dev/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 2025 年 12 月最新官方 endpoint：加 /swap 和 v6.1
+  const url = `https://api.1inch.dev/swap/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
