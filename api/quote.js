@@ -24,8 +24,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 构建 1inch URL（最新官方 endpoint：api.1inch.io，chain 42161 Arbitrum）
-  const url = `https://api.1inch.io/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 最新官方 endpoint（2025 年 12 月）：加 /classic/ 路径
+  const url = `https://api.1inch.io/v6.0/42161/classic/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
@@ -39,7 +39,6 @@ export default async function handler(req, res) {
     // 直接透传 1inch 的状态码和数据（包括无路由时的错误）
     res.status(response.status).json(data);
   } catch (error) {
-    // 只在真正代理失败时返回（比如网络或 key 问题）
     console.error('1inch proxy error:', error); // Vercel logs 会记录，便于你以后查
     res.status(500).json({ error: 'Proxy error' });
   }
