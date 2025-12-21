@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 修复路径：移除多余 /swap 前缀（避免双 /swap）
+  // 官方最新路径（v6.1）
   const url = new URL('https://api.1inch.dev/v6.1/42161/swap');
   Object.keys(queryParams).forEach(key => {
     if (queryParams[key]) {
