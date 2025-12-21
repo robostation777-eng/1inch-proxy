@@ -4,18 +4,14 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 处理可能的 array 参数（Vercel/Next.js 有时会这样）
-  // 同时对关键地址参数强制转小写（1inch API 严格要求小写）
   const queryParams = { ...req.query };
 
-  // 辅助函数：安全取出字符串参数并处理 array/trim
   const getParam = (key) => {
     const value = queryParams[key];
     if (Array.isArray(value)) return value[0]?.toString().trim() || '';
     return value?.toString().trim() || '';
   };
 
-  // 取出并强制小写地址参数（如果存在）
   if (queryParams.fromTokenAddress) {
     queryParams.fromTokenAddress = getParam('fromTokenAddress').toLowerCase();
   }
@@ -23,14 +19,12 @@ export default async function handler(req, res) {
     queryParams.toTokenAddress = getParam('toTokenAddress').toLowerCase();
   }
 
-  // 其他参数（如 amount, slippage, fromAddress 等）保持原样处理 array/trim
   Object.keys(queryParams).forEach((key) => {
     if (!['fromTokenAddress', 'toTokenAddress'].includes(key)) {
       queryParams[key] = getParam(key);
     }
   });
 
-  // 基础参数校验
   const required = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
   const missing = required.filter(key => !queryParams[key]);
   if (missing.length > 0) {
@@ -38,8 +32,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 最新官方 endpoint（加 /classic/ 路径）
-  const url = new URL('https://api.1inch.io/v6.0/42161/classic/swap');
+  // 正确官方 endpoint（无 /classic/）
+  const url = new URL('https://api.1inch.io/v6.0/42161/swap');
   Object.keys(queryParams).forEach(key => {
     if (queryParams[key]) {
       url.searchParams.append(key, queryParams[key]);
