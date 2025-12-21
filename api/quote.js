@@ -31,8 +31,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 2025 年 12 月最新官方 endpoint (v6.1 + .io 域名，无额外 /swap 前缀)
-  const url = `https://api.1inch.io/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 修复路径：移除多余 /swap 前缀（quote 不需要）
+  const url = `https://api.1inch.dev/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
