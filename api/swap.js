@@ -30,8 +30,7 @@ export default async function handler(req, res) {
     }
   });
 
-  // 可选：基础参数校验（防止空请求直接打 1inch，节省 quota）
-  // 1inch swap 至少需要 fromTokenAddress, toTokenAddress, amount, fromAddress, slippage
+  // 基础参数校验
   const required = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
   const missing = required.filter(key => !queryParams[key]);
   if (missing.length > 0) {
@@ -39,8 +38,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 构建 URL（最新官方 endpoint：api.1inch.io，chain 42161 Arbitrum）
-  const url = new URL('https://api.1inch.io/v6.0/42161/swap');
+  // 最新官方 endpoint（加 /classic/ 路径）
+  const url = new URL('https://api.1inch.io/v6.0/42161/classic/swap');
   Object.keys(queryParams).forEach(key => {
     if (queryParams[key]) {
       url.searchParams.append(key, queryParams[key]);
@@ -56,10 +55,9 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // 直接透传 1inch 的状态码和数据
     res.status(response.status).json(data);
   } catch (error) {
-    console.error('1inch swap proxy error:', error); // 便于 Vercel logs 排查
+    console.error('1inch swap proxy error:', error);
     res.status(500).json({ error: 'Proxy error' });
   }
 }
