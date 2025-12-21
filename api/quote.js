@@ -1,10 +1,9 @@
 export default async function handler(req, res) {
-  // 加 CORS headers（支持跨域）
+  // CORS 支持跨域（dapp 调用必备）
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // 处理预检请求
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -32,7 +31,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  const url = `https://api.1inch.io/v6.0/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 2025 年 12 月稳定 endpoint: v5.2 + .io 域名
+  const url = `https://api.1inch.io/v5.2/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
