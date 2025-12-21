@@ -39,8 +39,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 构建 URL
-  const url = new URL('https://api.1inch.dev/v6.0/42161/swap');
+  // 构建 URL（最新官方 endpoint：api.1inch.io，chain 42161 Arbitrum）
+  const url = new URL('https://api.1inch.io/v6.0/42161/swap');
   Object.keys(queryParams).forEach(key => {
     if (queryParams[key]) {
       url.searchParams.append(key, queryParams[key]);
