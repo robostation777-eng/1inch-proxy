@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS 支持跨域
+  // CORS 支持所有来源
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,59 +10,71 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'GET') {
-    res.status(405).end();
+    res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
-  const queryParams = { ...req.query };
-
-  const getParam = (key) => {
-    const value = queryParams[key];
-    if (Array.isArray(value)) return value[0]?.toString().trim() || '';
-    return value?.toString().trim() || '';
-  };
-
-  if (queryParams.fromTokenAddress) {
-    queryParams.fromTokenAddress = getParam('fromTokenAddress').toLowerCase();
-  }
-  if (queryParams.toTokenAddress) {
-    queryParams.toTokenAddress = getParam('toTokenAddress').toLowerCase();
-  }
-
-  Object.keys(queryParams).forEach((key) => {
-    if (!['fromTokenAddress', 'toTokenAddress'].includes(key)) {
-      queryParams[key] = getParam(key);
-    }
-  });
-
-  const required = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
-  const missing = required.filter(key => !queryParams[key]);
-  if (missing.length > 0) {
-    res.status(400).json({ error: `Missing parameters: ${missing.join(', ')}` });
+  // 支持多链：从 query 获取 chainId，默认 42161
+  const chainId = parseInt(req.query.chainId || '42161');
+  const supportedChainIds = [1, 56, 137, 10, 42161, 8453]; // 与 DApp 一致
+  if (!supportedChainIds.includes(chainId)) {
+    res.status(400).json({ error: 'Unsupported chainId' });
     return;
   }
 
-  // 保持你之前通过的路径
-  const url = new URL('https://api.1inch.dev/swap/v6.1/42161/swap');
-  Object.keys(queryParams).forEach(key => {
-    if (queryParams[key]) {
-      url.searchParams.append(key, queryParams[key]);
+  // 提取并清理参数
+  const params = new URLSearchParams();
+  const requiredParams = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
+
+  for (const key of requiredParams) {
+    let value = req.query[key];
+    if (Array.isArray(value)) value = value[0];
+    value = value?.toString().trim().toLowerCase();
+    if (!value) {
+      res.status(400).json({ error: `Missing or invalid parameter: ${key}` });
+      return;
+    }
+    if (key === 'fromTokenAddress' || key === 'toTokenAddress') {
+      params.append(key, value);
+    } else {
+      params.append(key, value);
+    }
+  }
+
+  // 其他可选参数原样转发
+  Object.keys(req.query).forEach(key => {
+    if (!requiredParams.includes(key) && key !== 'chainId') {
+      let value = req.query[key];
+      if (Array.isArray(value)) value = value[0];
+      params.append(key, value?.toString().trim());
     }
   });
+
+  // 使用稳定版本 v6.0
+  const url = `https://api.1inch.dev/swap/v6.0/${chainId}/swap?${params.toString()}`;
 
   try {
     const response = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
+        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
+        'Accept': 'application/json',
       },
     });
 
     const data = await response.json();
 
-    res.status(response.status).json(data);
+    if (!response.ok) {
+      res.status(response.status).json({
+        error: data.description || data.message || '1inch swap failed',
+        status: response.status,
+      });
+      return;
+    }
+
+    res.status(200).json(data);
   } catch (error) {
     console.error('1inch swap proxy error:', error);
-    res.status(500).json({ error: 'Proxy error' });
+    res.status(500).json({ error: 'Internal proxy error' });
   }
 }
 
