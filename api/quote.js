@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS 支持 dapp 跨域调用（必加）
+  // CORS 支持所有来源
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,43 +10,53 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'GET') {
-    res.status(405).end();
+    res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
-  const fromTokenAddress = (Array.isArray(req.query.fromTokenAddress)
-    ? req.query.fromTokenAddress[0]
-    : req.query.fromTokenAddress || '').toString().toLowerCase().trim();
+  // 支持多链：从 query 获取 chainId，默认 42161 (Arbitrum)
+  const chainId = parseInt(req.query.chainId || '42161');
+  const supportedChainIds = [1, 56, 137, 10, 42161, 8453]; // 与 DApp 一致
+  if (!supportedChainIds.includes(chainId)) {
+    res.status(400).json({ error: 'Unsupported chainId' });
+    return;
+  }
 
-  const toTokenAddress = (Array.isArray(req.query.toTokenAddress)
-    ? req.query.toTokenAddress[0]
-    : req.query.toTokenAddress || '').toString().toLowerCase().trim();
-
-  const amount = (Array.isArray(req.query.amount)
-    ? req.query.amount[0]
-    : req.query.amount || '').toString().trim();
+  const fromTokenAddress = (req.query.fromTokenAddress || '').toString().toLowerCase().trim();
+  const toTokenAddress = (req.query.toTokenAddress || '').toString().toLowerCase().trim();
+  const amount = (req.query.amount || '').toString().trim();
 
   if (!fromTokenAddress || !toTokenAddress || !amount) {
-    res.status(400).json({ error: 'Missing parameters' });
+    res.status(400).json({ error: 'Missing parameters: fromTokenAddress, toTokenAddress, amount' });
     return;
   }
 
-  // 保持你之前通过的路径
-  const url = `https://api.1inch.dev/swap/v6.1/42161/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 使用最新稳定版本 v6.0（推荐）
+  const url = `https://api.1inch.dev/swap/v6.0/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
 
   try {
     const response = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
+        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
+        'Accept': 'application/json',
       },
     });
 
     const data = await response.json();
 
-    res.status(response.status).json(data);
+    if (!response.ok) {
+      // 友好错误处理
+      res.status(response.status).json({
+        error: data.description || data.message || '1inch quote failed',
+        status: response.status,
+      });
+      return;
+    }
+
+    res.status(200).json(data);
   } catch (error) {
     console.error('1inch proxy error:', error);
-    res.status(500).json({ error: 'Proxy error' });
+    res.status(500).json({ error: 'Internal proxy error' });
   }
 }
 
