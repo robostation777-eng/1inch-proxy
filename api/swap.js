@@ -32,7 +32,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 层1: 1inch
+  // 仅保留 1inch swap（复杂 fallback 移至前端更灵活）
   try {
     const params = new URLSearchParams();
     params.append('fromTokenAddress', fromTokenAddress);
@@ -53,13 +53,10 @@ export default async function handler(req, res) {
       return;
     }
   } catch (err) {
-    console.warn('1inch swap failed, trying fallback');
+    console.warn('1inch swap failed');
   }
 
-  // 层2 & 3: KyberSwap + 0x 需要前端处理两步（quote + build），代理难以统一
-  // 因此 swap 代理仅保留 1inch，复杂 fallback 移至前端（更灵活）
-
-  // 仅返回 1inch 失败时错误，前端根据 quote 结果决定使用哪个聚合器
+  // 失败时返回错误，前端根据 quote 的 aggregator 字段执行 KyberSwap 或 OpenOcean swap
   res.status(404).json({ error: 'No swap route from 1inch, fallback handled in frontend' });
 }
 
