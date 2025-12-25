@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 链 slug 映射 (KyberSwap 和 OpenOcean 使用)
+  // 链 slug 映射 (KyberSwap 和 OpenOcean 使用，已补充主流链)
   const chainSlugMap = {
     1: 'ethereum',
     56: 'bsc',
@@ -42,6 +42,12 @@ export default async function handler(req, res) {
     81457: 'blast',
     7777777: 'zora',
     42220: 'celo',
+    534352: 'scroll',        // Scroll
+    5000: 'mantle',          // Mantle
+    169: 'manta',            // Manta Pacific
+    34443: 'mode',           // Mode
+    3776: 'berachain',       // Berachain
+    // 如需更多链可继续扩展
   };
   const chainSlug = chainSlugMap[chainId] || 'arbitrum';
 
