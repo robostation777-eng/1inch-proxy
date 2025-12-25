@@ -1,4 +1,5 @@
 export default async function handler(req, res) {
+  // CORS 支持所有来源
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -13,23 +14,37 @@ export default async function handler(req, res) {
     return;
   }
 
-  const chainId = parseInt(req.query.chainId || '42161', 10);
-  const supportedChainIds = [1, 56, 137, 10, 42161, 8453];
+  const queryParams = { ...req.query };
+  const getParam = (key) => {
+    const value = queryParams[key];
+    if (Array.isArray(value)) return value[0]?.toString().trim() || '';
+    return value?.toString().trim() || '';
+  };
 
-  if (!supportedChainIds.includes(chainId)) {
-    res.status(400).json({ error: 'Unsupported chainId' });
+  const fromTokenAddress = getParam('fromTokenAddress').toLowerCase();
+  const toTokenAddress = getParam('toTokenAddress').toLowerCase();
+  const amount = getParam('amount');
+  const fromAddress = getParam('fromAddress');
+  const slippage = getParam('slippage') || '0.5';
+
+  if (!fromTokenAddress || !toTokenAddress || !amount || !fromAddress) {
+    res.status(400).json({ error: 'Missing required parameters' });
     return;
   }
 
-  const params = new URLSearchParams(req.query);
-
-  // 1. 优先 1inch
+  // 层1: 1inch
   try {
-    const inchUrl = `https://api.1inch.dev/swap/v6.0/${chainId}/swap?${params.toString()}`;
+    const params = new URLSearchParams();
+    params.append('fromTokenAddress', fromTokenAddress);
+    params.append('toTokenAddress', toTokenAddress);
+    params.append('amount', amount);
+    params.append('fromAddress', fromAddress);
+    params.append('slippage', slippage);
+
+    const inchUrl = `https://api.1inch.dev/swap/v6.1/42161/swap?${params.toString()}`;
     const inchResponse = await fetch(inchUrl, {
       headers: {
-        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
-        'Accept': 'application/json',
+        Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
       },
     });
     const inchData = await inchResponse.json();
@@ -41,43 +56,11 @@ export default async function handler(req, res) {
     console.warn('1inch swap failed, trying fallback');
   }
 
-  // 2. fallback KyberSwap (需先 quote 获取 routeSummary，再 build)
-  // 注意：KyberSwap swap 需要两步（quote + build），这里简化示例，前端需配合
-  // 为完整性，这里省略详细 KyberSwap swap fallback（因复杂，建议前端处理）
+  // 层2 & 3: KyberSwap + 0x 需要前端处理两步（quote + build），代理难以统一
+  // 因此 swap 代理仅保留 1inch，复杂 fallback 移至前端（更灵活）
 
-  // 3. fallback 0x
-  try {
-    let sellToken = params.get('fromTokenAddress');
-    let buyToken = params.get('toTokenAddress');
-    if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') sellToken = 'ETH';
-    if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') buyToken = 'ETH';
-
-    const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
-    const takerAddress = params.get('fromAddress');
-    const slippagePercentage = params.get('slippage') || '0.5';
-    const sellAmount = params.get('amount');
-
-    const url = `${baseUrl}/swap/v1/quote?sellToken=${encodeURIComponent(sellToken)}&buyToken=${encodeURIComponent(buyToken)}&sellAmount=${sellAmount}&takerAddress=${takerAddress}&slippagePercentage=${slippagePercentage}`;
-
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (!response.ok) throw new Error('0x failed');
-
-    res.status(200).json({
-      tx: {
-        to: data.to,
-        data: data.data,
-        value: data.value || '0',
-        gas: data.gas,
-        gasPrice: data.gasPrice,
-      },
-    });
-    return;
-  } catch (error) {
-    console.error('All aggregators failed:', error);
-    res.status(500).json({ error: 'All aggregators failed, fallback to Uniswap official' });
-  }
+  // 仅返回 1inch 失败时错误，前端根据 quote 结果决定使用哪个聚合器
+  res.status(404).json({ error: 'No swap route from 1inch, fallback handled in frontend' });
 }
 
 export const config = {
