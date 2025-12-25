@@ -28,20 +28,26 @@ export default async function handler(req, res) {
   const params = new URLSearchParams();
 
   for (const key of requiredParams) {
-    let value = req.query[key];
-    if (Array.isArray(value)) value = value[0];
-    value = value?.toString().trim();
-
+    let paramKey = key;
+    let value = req.query[key === 'slippage' ? 'slippage' : key.replace('Address', 'Token').replace('fromAddress', 'takerAddress')];
     if (!value) {
       res.status(400).json({ error: `Missing or invalid parameter: ${key}` });
       return;
     }
+    value = value.toString().trim();
 
-    if (key === 'fromTokenAddress' || key === 'toTokenAddress') {
-      params.append(key, value.toLowerCase());
-    } else {
-      params.append(key, value);
+    if (key === 'fromTokenAddress') paramKey = 'sellToken';
+    if (key === 'toTokenAddress') paramKey = 'buyToken';
+    if (key === 'amount') paramKey = 'sellAmount';
+    if (key === 'fromAddress') paramKey = 'takerAddress';
+    if (key === 'slippage') paramKey = 'slippagePercentage';
+
+    // 0x 使用 ETH
+    if (value.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+      value = 'ETH';
     }
+
+    params.append(paramKey, value);
   }
 
   // 可选参数原样转发（排除 chainId）
@@ -53,30 +59,35 @@ export default async function handler(req, res) {
     }
   });
 
-  // 使用稳定版本 v6.0
-  const url = `https://api.1inch.dev/swap/v6.0/${chainId}/swap?${params.toString()}`;
+  // 0x API 基 URL
+  const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
+
+  const url = `${baseUrl}/swap/v1/quote?${params.toString()}`;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
-        'Accept': 'application/json',
-      },
-    });
-
+    const response = await fetch(url);
     const data = await response.json();
 
     if (!response.ok) {
       res.status(response.status).json({
-        error: data.description || data.message || '1inch swap failed',
+        error: data.validation?.errors?.[0]?.reason || data.reason || '0x swap failed',
         status: response.status,
       });
       return;
     }
 
-    res.status(200).json(data);
+    // 统一返回结构与前端兼容（类似 1inch 的 tx 字段）
+    res.status(200).json({
+      tx: {
+        to: data.to,
+        data: data.data,
+        value: data.value || '0',
+        gas: data.gas,
+        gasPrice: data.gasPrice,
+      },
+    });
   } catch (error) {
-    console.error('1inch swap proxy error:', error);
+    console.error('0x swap proxy error:', error);
     res.status(500).json({ error: 'Internal proxy error' });
   }
 }
