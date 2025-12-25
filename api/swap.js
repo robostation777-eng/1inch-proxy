@@ -23,44 +23,36 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 必填参数
-  const requiredParams = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
-  const params = new URLSearchParams();
+  let sellToken = (req.query.fromTokenAddress || '').toString().trim();
+  let buyToken = (req.query.toTokenAddress || '').toString().trim();
+  const sellAmount = (req.query.amount || '').toString().trim();
+  const takerAddress = (req.query.fromAddress || '').toString().trim();
+  const slippagePercentage = (req.query.slippage || '0.5').toString().trim();
 
-  for (const key of requiredParams) {
-    let paramKey = key;
-    let value = req.query[key === 'slippage' ? 'slippage' : key.replace('Address', 'Token').replace('fromAddress', 'takerAddress')];
-    if (!value) {
-      res.status(400).json({ error: `Missing or invalid parameter: ${key}` });
-      return;
-    }
-    value = value.toString().trim();
-
-    if (key === 'fromTokenAddress') paramKey = 'sellToken';
-    if (key === 'toTokenAddress') paramKey = 'buyToken';
-    if (key === 'amount') paramKey = 'sellAmount';
-    if (key === 'fromAddress') paramKey = 'takerAddress';
-    if (key === 'slippage') paramKey = 'slippagePercentage';
-
-    // 0x 使用 ETH
-    if (value.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
-      value = 'ETH';
-    }
-
-    params.append(paramKey, value);
+  if (!sellToken || !buyToken || !sellAmount || !takerAddress) {
+    res.status(400).json({ error: 'Missing required parameters' });
+    return;
   }
 
-  // 可选参数原样转发（排除 chainId）
-  Object.keys(req.query).forEach((key) => {
-    if (!requiredParams.includes(key) && key !== 'chainId') {
-      let value = req.query[key];
-      if (Array.isArray(value)) value = value[0];
-      params.append(key, value?.toString().trim());
-    }
-  });
+  // 0x 使用 "ETH" 表示原生代币
+  if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    sellToken = 'ETH';
+  }
+  if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    buyToken = 'ETH';
+  }
 
   // 0x API 基 URL
   const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
+
+  // 0x quote 端点同时支持 firm quote（包含 tx 数据）
+  const params = new URLSearchParams({
+    sellToken: encodeURIComponent(sellToken),
+    buyToken: encodeURIComponent(buyToken),
+    sellAmount,
+    takerAddress,
+    slippagePercentage,
+  });
 
   const url = `${baseUrl}/swap/v1/quote?${params.toString()}`;
 
@@ -76,7 +68,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 统一返回结构与前端兼容（类似 1inch 的 tx 字段）
+    // 统一返回结构，与前端兼容
     res.status(200).json({
       tx: {
         to: data.to,
