@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // CORS 支持所有来源
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -14,7 +13,6 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 支持多链：从 query 获取 chainId，默认 42161
   const chainId = parseInt(req.query.chainId || '42161', 10);
   const supportedChainIds = [1, 56, 137, 10, 42161, 8453];
 
@@ -23,52 +21,49 @@ export default async function handler(req, res) {
     return;
   }
 
-  let sellToken = (req.query.fromTokenAddress || '').toString().trim();
-  let buyToken = (req.query.toTokenAddress || '').toString().trim();
-  const sellAmount = (req.query.amount || '').toString().trim();
-  const takerAddress = (req.query.fromAddress || '').toString().trim();
-  const slippagePercentage = (req.query.slippage || '0.5').toString().trim();
+  const params = new URLSearchParams(req.query);
 
-  if (!sellToken || !buyToken || !sellAmount || !takerAddress) {
-    res.status(400).json({ error: 'Missing required parameters' });
-    return;
-  }
-
-  // 0x 使用 "ETH" 表示原生代币
-  if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
-    sellToken = 'ETH';
-  }
-  if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
-    buyToken = 'ETH';
-  }
-
-  // 0x API 基 URL
-  const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
-
-  // 0x quote 端点同时支持 firm quote（包含 tx 数据）
-  const params = new URLSearchParams({
-    sellToken: encodeURIComponent(sellToken),
-    buyToken: encodeURIComponent(buyToken),
-    sellAmount,
-    takerAddress,
-    slippagePercentage,
-  });
-
-  const url = `${baseUrl}/swap/v1/quote?${params.toString()}`;
-
+  // 1. 优先 1inch
   try {
+    const inchUrl = `https://api.1inch.dev/swap/v6.0/${chainId}/swap?${params.toString()}`;
+    const inchResponse = await fetch(inchUrl, {
+      headers: {
+        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
+        'Accept': 'application/json',
+      },
+    });
+    const inchData = await inchResponse.json();
+    if (inchResponse.ok && inchData.tx) {
+      res.status(200).json(inchData);
+      return;
+    }
+  } catch (err) {
+    console.warn('1inch swap failed, trying fallback');
+  }
+
+  // 2. fallback KyberSwap (需先 quote 获取 routeSummary，再 build)
+  // 注意：KyberSwap swap 需要两步（quote + build），这里简化示例，前端需配合
+  // 为完整性，这里省略详细 KyberSwap swap fallback（因复杂，建议前端处理）
+
+  // 3. fallback 0x
+  try {
+    let sellToken = params.get('fromTokenAddress');
+    let buyToken = params.get('toTokenAddress');
+    if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') sellToken = 'ETH';
+    if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') buyToken = 'ETH';
+
+    const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
+    const takerAddress = params.get('fromAddress');
+    const slippagePercentage = params.get('slippage') || '0.5';
+    const sellAmount = params.get('amount');
+
+    const url = `${baseUrl}/swap/v1/quote?sellToken=${encodeURIComponent(sellToken)}&buyToken=${encodeURIComponent(buyToken)}&sellAmount=${sellAmount}&takerAddress=${takerAddress}&slippagePercentage=${slippagePercentage}`;
+
     const response = await fetch(url);
     const data = await response.json();
 
-    if (!response.ok) {
-      res.status(response.status).json({
-        error: data.validation?.errors?.[0]?.reason || data.reason || '0x swap failed',
-        status: response.status,
-      });
-      return;
-    }
+    if (!response.ok) throw new Error('0x failed');
 
-    // 统一返回结构，与前端兼容
     res.status(200).json({
       tx: {
         to: data.to,
@@ -78,9 +73,10 @@ export default async function handler(req, res) {
         gasPrice: data.gasPrice,
       },
     });
+    return;
   } catch (error) {
-    console.error('0x swap proxy error:', error);
-    res.status(500).json({ error: 'Internal proxy error' });
+    console.error('All aggregators failed:', error);
+    res.status(500).json({ error: 'All aggregators failed, fallback to Uniswap official' });
   }
 }
 
