@@ -14,12 +14,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  const fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim();
-  const toTokenAddress = (req.query.toTokenAddress || '').toString().trim();
+  const fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim().toLowerCase();
+  const toTokenAddress = (req.query.toTokenAddress || '').toString().trim().toLowerCase();
   const amount = (req.query.amount || '').toString().trim();
 
   if (!fromTokenAddress || !toTokenAddress || !amount) {
-    res.status(400).json({ error: 'Missing parameters: fromTokenAddress, toTokenAddress, amount' });
+    res.status(400).json({ error: 'Missing parameters' });
     return;
   }
 
@@ -34,7 +34,10 @@ export default async function handler(req, res) {
     });
     const inchData = await inchResponse.json();
     if (inchResponse.ok && inchData.toAmount) {
-      res.status(200).json(inchData);
+      res.status(200).json({
+        ...inchData,
+        aggregator: '1inch',
+      });
       return;
     }
   } catch (err) {
@@ -45,8 +48,8 @@ export default async function handler(req, res) {
   try {
     let tokenIn = fromTokenAddress;
     let tokenOut = toTokenAddress;
-    if (tokenIn.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenIn = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-    if (tokenOut.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenOut = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+    if (tokenIn === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenIn = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+    if (tokenOut === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenOut = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 
     const kyberUrl = `https://aggregator-api.kyberswap.com/arbitrum/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
     const kyberResponse = await fetch(kyberUrl, {
@@ -54,7 +57,6 @@ export default async function handler(req, res) {
     });
     const kyberData = await kyberResponse.json();
     if (kyberResponse.ok && kyberData.data?.routeSummary?.amountOut) {
-      // 统一返回结构供前端兼容
       res.status(200).json({
         toAmount: kyberData.data.routeSummary.amountOut,
         fromAmount: amount,
@@ -64,31 +66,25 @@ export default async function handler(req, res) {
       return;
     }
   } catch (err) {
-    console.warn('KyberSwap quote failed, trying 0x');
+    console.warn('KyberSwap quote failed, trying OpenOcean');
   }
 
-  // 层3: 0x Swap API
+  // 层3: OpenOcean (低流动性支持优秀)
   try {
-    let sellToken = fromTokenAddress;
-    let buyToken = toTokenAddress;
-    if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') sellToken = 'ETH';
-    if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') buyToken = 'ETH';
-
-    const zeroXUrl = `https://arbitrum.api.0x.org/swap/v1/quote?sellToken=${encodeURIComponent(sellToken)}&buyToken=${encodeURIComponent(buyToken)}&sellAmount=${amount}`;
-    const zeroXResponse = await fetch(zeroXUrl);
-    const zeroXData = await zeroXResponse.json();
-
-    if (zeroXResponse.ok && zeroXData.buyAmount) {
+    const openOceanUrl = `https://open-api.openocean.finance/v3/arb/getQuote?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&gasPrice=5&slippage=100`; // slippage 1%
+    const openOceanResponse = await fetch(openOceanUrl);
+    const openOceanData = await openOceanResponse.json();
+    if (openOceanResponse.ok && openOceanData.data && openOceanData.data.outAmount) {
       res.status(200).json({
-        toAmount: zeroXData.buyAmount,
+        toAmount: openOceanData.data.outAmount,
         fromAmount: amount,
-        route: zeroXData,
-        aggregator: '0x',
+        route: openOceanData.data,
+        aggregator: 'OpenOcean',
       });
       return;
     }
   } catch (err) {
-    console.warn('0x quote failed');
+    console.warn('OpenOcean quote failed');
   }
 
   // 所有聚合器均失败
