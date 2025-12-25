@@ -1,8 +1,14 @@
-// api/tokens.js
-// Vercel Serverless Function：代理 1inch tokens API，支持跨域
+// /api/tokens.js
+// Vercel Serverless Function：多源聚合代币列表，支持所有主流 EVM 链
 
 export default async function handler(req, res) {
-  // 只允许 GET 请求
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(200).end();
+  }
+
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -10,45 +16,90 @@ export default async function handler(req, res) {
 
   const { chainId } = req.query;
 
-  // 必须提供 chainId
-  if (!chainId) {
-    return res.status(400).json({ error: 'Missing chainId parameter' });
+  if (!chainId || !/^\d+$/.test(chainId)) {
+    return res.status(400).json({ error: 'Invalid or missing chainId parameter' });
   }
 
-  // 验证 chainId 是数字（防止注入）
-  if (!/^\d+$/.test(chainId)) {
-    return res.status(400).json({ error: 'Invalid chainId' });
-  }
+  const numericChainId = parseInt(chainId, 10);
+
+  // 设置 CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=60');
 
   try {
-    // 转发到 1inch 官方 API
-    const url = `https://api.1inch.io/v5.2/${chainId}/tokens`;
-    const response = await fetch(url);
+    // 层1: 优先使用 1inch 官方 API（覆盖最全、最准确）
+    const oneInchUrl = `https://api.1inch.io/v5.2/${numericChainId}/tokens`;
+    const oneInchResponse = await fetch(oneInchUrl, { next: { revalidate: 300 } });
 
-    if (!response.ok) {
-      // 1inch 返回错误时，转发状态码和信息
-      const errorData = await response.json().catch(() => ({}));
-      return res.status(response.status).json(errorData || { error: '1inch API error' });
+    if (oneInchResponse.ok) {
+      const data = await oneInchResponse.json();
+      return res.status(200).json(data);
     }
 
-    const data = await response.json();
-
-    // 设置 CORS 头，允许前端跨域访问
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    // 缓存 5 分钟（减少 1inch API 压力）
-    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=60');
-
-    res.status(200).json(data);
-  } catch (error) {
-    console.error('Proxy tokens error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.warn(`1inch API failed for chain ${numericChainId}, status: ${oneInchResponse.status}`);
+  } catch (err) {
+    console.warn(`1inch API request failed for chain ${numericChainId}:`, err.message);
   }
+
+  // 层2: Fallback 到 Coingecko 或其他公共列表（根据 chainId 映射知名列表）
+  try {
+    const fallbackLists = {
+      // Ethereum & L2s
+      1: 'https://tokens.coingecko.com/uniswap/all.json',
+      10: 'https://tokens.coingecko.com/optimism/all.json',
+      42161: 'https://tokens.coingecko.com/arbitrum-one/all.json',
+      8453: 'https://tokens.coingecko.com/base/all.json',
+      324: 'https://tokens.coingecko.com/zksync/all.json',
+      59144: 'https://tokens.coingecko.com/linea/all.json',
+      81457: 'https://tokens.coingecko.com/blast/all.json',
+      7777777: 'https://tokens.coingecko.com/zora/all.json',
+      534352: 'https://tokens.coingecko.com/scroll/all.json',
+      // BSC & Polygon
+      56: 'https://tokens.pancakeswap.finance/pancakeswap-extended.json',
+      137: 'https://unpkg.com/quickswap-default-token-list@1.1.17/build/quickswap-default.tokenlist.json',
+      // Avalanche
+      43114: 'https://raw.githubusercontent.com/traderjoe-xyz/joe-tokenlists/main/joe.tokenlist.json',
+      // Fantom
+      250: 'https://raw.githubusercontent.com/spookyswap/spooky-tokenlist/main/spooky.tokenlist.json',
+    };
+
+    const fallbackUrl = fallbackLists[numericChainId];
+
+    if (fallbackUrl) {
+      const fallbackResponse = await fetch(fallbackUrl);
+      if (fallbackResponse.ok) {
+        const listData = await fallbackResponse.json();
+
+        // 转换为 1inch 兼容格式
+        const tokens = {};
+        const tokenArray = listData.tokens || listData;
+
+        tokenArray.forEach(token => {
+          if (token.chainId === numericChainId) {
+            tokens[token.address.toLowerCase()] = {
+              symbol: token.symbol,
+              name: token.name,
+              address: token.address.toLowerCase(),
+              decimals: token.decimals,
+              logoURI: token.logoURI || null,
+            };
+          }
+        });
+
+        return res.status(200).json({ tokens });
+      }
+    }
+  } catch (err) {
+    console.warn(`Fallback token list failed for chain ${numericChainId}:`, err.message);
+  }
+
+  // 最终 fallback：返回空列表（极少发生）
+  console.error(`All token sources failed for chain ${numericChainId}`);
+  return res.status(200).json({ tokens: {} });
 }
 
-// Vercel 需要这个配置（处理异步 fetch）
 export const config = {
   api: {
     externalResolver: true,
