@@ -23,31 +23,35 @@ export default async function handler(req, res) {
     return;
   }
 
-  const fromTokenAddress = (req.query.fromTokenAddress || '').toString().toLowerCase().trim();
-  const toTokenAddress = (req.query.toTokenAddress || '').toString().toLowerCase().trim();
-  const amount = (req.query.amount || '').toString().trim();
+  let sellToken = (req.query.fromTokenAddress || '').toString().trim();
+  let buyToken = (req.query.toTokenAddress || '').toString().trim();
+  const sellAmount = (req.query.amount || '').toString().trim();
 
-  if (!fromTokenAddress || !toTokenAddress || !amount) {
+  if (!sellToken || !buyToken || !sellAmount) {
     res.status(400).json({ error: 'Missing parameters: fromTokenAddress, toTokenAddress, amount' });
     return;
   }
 
-  // 使用最新稳定版本 v6.0
-  const url = `https://api.1inch.dev/swap/v6.0/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+  // 0x 使用 ETH 而非 0xeee... 地址
+  if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    sellToken = 'ETH';
+  }
+  if (buyToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    buyToken = 'ETH';
+  }
+
+  // 0x API 基 URL（Arbitrum 使用专用子域）
+  const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
+
+  const url = `${baseUrl}/swap/v1/quote?sellToken=${encodeURIComponent(sellToken)}&buyToken=${encodeURIComponent(buyToken)}&sellAmount=${sellAmount}`;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${process.env.ONEINCH_API_KEY}`,
-        'Accept': 'application/json',
-      },
-    });
-
+    const response = await fetch(url);
     const data = await response.json();
 
     if (!response.ok) {
       res.status(response.status).json({
-        error: data.description || data.message || '1inch quote failed',
+        error: data.validation?.errors?.[0]?.reason || data.reason || '0x quote failed',
         status: response.status,
       });
       return;
@@ -55,7 +59,7 @@ export default async function handler(req, res) {
 
     res.status(200).json(data);
   } catch (error) {
-    console.error('1inch quote proxy error:', error);
+    console.error('0x quote proxy error:', error);
     res.status(500).json({ error: 'Internal proxy error' });
   }
 }
