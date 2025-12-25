@@ -15,34 +15,37 @@ export default async function handler(req, res) {
   }
 
   // 支持多链：从 query 获取 chainId，默认 42161
-  const chainId = parseInt(req.query.chainId || '42161');
-  const supportedChainIds = [1, 56, 137, 10, 42161, 8453]; // 与 DApp 一致
+  const chainId = parseInt(req.query.chainId || '42161', 10);
+  const supportedChainIds = [1, 56, 137, 10, 42161, 8453];
+
   if (!supportedChainIds.includes(chainId)) {
     res.status(400).json({ error: 'Unsupported chainId' });
     return;
   }
 
-  // 提取并清理参数
-  const params = new URLSearchParams();
+  // 必填参数
   const requiredParams = ['fromTokenAddress', 'toTokenAddress', 'amount', 'fromAddress', 'slippage'];
+  const params = new URLSearchParams();
 
   for (const key of requiredParams) {
     let value = req.query[key];
     if (Array.isArray(value)) value = value[0];
-    value = value?.toString().trim().toLowerCase();
+    value = value?.toString().trim();
+
     if (!value) {
       res.status(400).json({ error: `Missing or invalid parameter: ${key}` });
       return;
     }
+
     if (key === 'fromTokenAddress' || key === 'toTokenAddress') {
-      params.append(key, value);
+      params.append(key, value.toLowerCase());
     } else {
       params.append(key, value);
     }
   }
 
-  // 其他可选参数原样转发
-  Object.keys(req.query).forEach(key => {
+  // 可选参数原样转发（排除 chainId）
+  Object.keys(req.query).forEach((key) => {
     if (!requiredParams.includes(key) && key !== 'chainId') {
       let value = req.query[key];
       if (Array.isArray(value)) value = value[0];
