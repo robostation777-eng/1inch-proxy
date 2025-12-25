@@ -32,7 +32,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 0x 使用 ETH 而非 0xeee... 地址
+  // 0x 使用 "ETH" 表示原生代币
   if (sellToken.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
     sellToken = 'ETH';
   }
@@ -40,9 +40,10 @@ export default async function handler(req, res) {
     buyToken = 'ETH';
   }
 
-  // 0x API 基 URL（Arbitrum 使用专用子域）
+  // 正确基 URL（Arbitrum 使用专用子域，其他链使用主域）
   const baseUrl = chainId === 42161 ? 'https://arbitrum.api.0x.org' : 'https://api.0x.org';
 
+  // 正确端点路径 /swap/v1/quote
   const url = `${baseUrl}/swap/v1/quote?sellToken=${encodeURIComponent(sellToken)}&buyToken=${encodeURIComponent(buyToken)}&sellAmount=${sellAmount}`;
 
   try {
