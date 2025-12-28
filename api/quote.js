@@ -122,12 +122,13 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('Uniswap API quote failed');
   }
-  // 层5: CowSwap (Gnosis Chain 官方聚合器，专为 Gnosis 优化)
+  // 层5: CowSwap (Gnosis Chain 官方聚合器)
   if (chainId === 100) {
     try {
-      let sellToken = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xe91d153e0b41518a2ce8dd3d7944fa863463a97d' : fromTokenAddress; // xDAI wrapped address
-      let buyToken = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xe91d153e0b41518a2ce8dd3d7944fa863463a97d' : toTokenAddress;
-      const cowUrl = `https://api.cow.fi/xdai/api/v1/quote`;
+      const WXDAI = '0xe91d153e0b41518a2ce8dd3d7944fa863463a97d';
+      let sellToken = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? WXDAI : fromTokenAddress;
+      let buyToken = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? WXDAI : toTokenAddress;
+      const cowUrl = 'https://api.cow.fi/xdai/api/v1/quote';
       const cowBody = {
         sellToken,
         buyToken,
@@ -140,7 +141,7 @@ export default async function handler(req, res) {
         body: JSON.stringify(cowBody),
       });
       const cowData = await cowResponse.json();
-      if (cowResponse.ok && cowData.quote && cowData.quote.buyAmount) {
+      if (cowResponse.ok && cowData.quote?.buyAmount) {
         res.status(200).json({
           toAmount: cowData.quote.buyAmount,
           fromAmount: amount,
@@ -153,7 +154,7 @@ export default async function handler(req, res) {
       console.warn('CowSwap quote failed');
     }
   }
-  // 所有聚合器均失败，前端跳转 Uniswap 官网
+  // 所有聚合器均失败
   res.status(404).json({ error: 'No route found from any aggregator' });
 }
 export const config = {
