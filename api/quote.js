@@ -3,22 +3,27 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
+
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
   const chainId = parseInt(req.query.chainId || '42161', 10);
   const fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim().toLowerCase();
   const toTokenAddress = (req.query.toTokenAddress || '').toString().trim().toLowerCase();
   const amount = (req.query.amount || '').toString().trim();
+
   if (!fromTokenAddress || !toTokenAddress || !amount) {
     res.status(400).json({ error: 'Missing parameters' });
     return;
   }
+
   // 链 slug 映射 (KyberSwap 和 OpenOcean 使用，已补充主流链)
   const chainSlugMap = {
     1: 'ethereum',
@@ -37,14 +42,15 @@ export default async function handler(req, res) {
     81457: 'blast',
     7777777: 'zora',
     42220: 'celo',
-    534352: 'scroll', // Scroll
-    5000: 'mantle', // Mantle
-    169: 'manta', // Manta Pacific
-    34443: 'mode', // Mode
-    3776: 'berachain', // Berachain
+    534352: 'scroll',        // Scroll
+    5000: 'mantle',          // Mantle
+    169: 'manta',            // Manta Pacific
+    34443: 'mode',           // Mode
+    3776: 'berachain',       // Berachain
     // 如需更多链可继续扩展
   };
   const chainSlug = chainSlugMap[chainId] || 'arbitrum';
+
   // 层1: 1inch
   try {
     const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
@@ -65,12 +71,14 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('1inch quote failed, trying KyberSwap');
   }
+
   // 层2: KyberSwap
   try {
     let tokenIn = fromTokenAddress;
     let tokenOut = toTokenAddress;
     if (tokenIn === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenIn = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
     if (tokenOut === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenOut = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+
     const kyberUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
     const kyberResponse = await fetch(kyberUrl, {
       headers: { 'x-client-id': 'RBS DApp' },
@@ -88,6 +96,7 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('KyberSwap quote failed, trying OpenOcean');
   }
+
   // 层3: OpenOcean
   try {
     const openOceanUrl = `https://open-api.openocean.finance/v3/${chainSlug}/quote?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&gasPrice=5&slippage=100`;
@@ -105,6 +114,7 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('OpenOcean quote failed, trying Uniswap API');
   }
+
   // 层4: Uniswap API (官方 V3 quote，支持多链)
   try {
     const uniswapUrl = `https://api.uniswap.org/v1/quote?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}`;
@@ -122,41 +132,11 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('Uniswap API quote failed');
   }
-  // 层5: CowSwap (Gnosis Chain 官方聚合器)
-  if (chainId === 100) {
-    try {
-      const WXDAI = '0xe91d153e0b41518a2ce8dd3d7944fa863463a97d';
-      let sellToken = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? WXDAI : fromTokenAddress;
-      let buyToken = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? WXDAI : toTokenAddress;
-      const cowUrl = 'https://api.cow.fi/xdai/api/v1/quote';
-      const cowBody = {
-        sellToken,
-        buyToken,
-        sellAmountBeforeFee: amount,
-        kind: 'sell',
-      };
-      const cowResponse = await fetch(cowUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cowBody),
-      });
-      const cowData = await cowResponse.json();
-      if (cowResponse.ok && cowData.quote?.buyAmount) {
-        res.status(200).json({
-          toAmount: cowData.quote.buyAmount,
-          fromAmount: amount,
-          route: cowData,
-          aggregator: 'CowSwap',
-        });
-        return;
-      }
-    } catch (err) {
-      console.warn('CowSwap quote failed');
-    }
-  }
-  // 所有聚合器均失败
+
+  // 所有聚合器均失败，前端跳转 Uniswap 官网
   res.status(404).json({ error: 'No route found from any aggregator' });
 }
+
 export const config = {
   api: {
     externalResolver: true,
