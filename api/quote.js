@@ -109,7 +109,7 @@ export default async function handler(req, res) {
     console.warn('OpenOcean quote failed, trying Uniswap API');
   }
 
-  // 层4: Uniswap API (官方 V3 quote，支持多链)
+  // 层4: Uniswap API
   try {
     const uniswapUrl = `https://api.uniswap.org/v1/quote?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}`;
     const uniswapResponse = await fetch(uniswapUrl);
@@ -127,14 +127,14 @@ export default async function handler(req, res) {
     console.warn('Uniswap API quote failed');
   }
 
-  // 层5: Jupiter Quote API (专为 Solana 链添加，修正端点为 /quote)
+  // 层5: Jupiter Quote API (修正端点为 /quote，使用环境变量 Key)
   if (chainId === 501) {
     try {
       const slippageBps = Math.round(Number(slippage) * 100);
       const jupiterUrl = `https://api.jup.ag/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${slippageBps}`;
       const jupiterResponse = await fetch(jupiterUrl, {
         headers: {
-          'x-api-key': process.env.JUPITER_API_KEY, // 使用 Vercel 环境变量
+          'x-api-key': process.env.JUPITER_API_KEY,
         },
       });
       if (!jupiterResponse.ok) {
