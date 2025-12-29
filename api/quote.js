@@ -3,27 +3,22 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
-
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
-
   const chainId = parseInt(req.query.chainId || '42161', 10);
   const fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim().toLowerCase();
   const toTokenAddress = (req.query.toTokenAddress || '').toString().trim().toLowerCase();
   const amount = (req.query.amount || '').toString().trim();
-
   if (!fromTokenAddress || !toTokenAddress || !amount) {
     res.status(400).json({ error: 'Missing parameters' });
     return;
   }
-
   // 链 slug 映射 (KyberSwap 和 OpenOcean 使用，已补充主流链)
   const chainSlugMap = {
     1: 'ethereum',
@@ -42,12 +37,11 @@ export default async function handler(req, res) {
     81457: 'blast',
     7777777: 'zora',
     42220: 'celo',
-    534352: 'scroll',        // Scroll
-    5000: 'mantle',          // Mantle
-    169: 'manta',            // Manta Pacific
-    34443: 'mode',           // Mode
-    3776: 'berachain',       // Berachain
-    // 如需更多链可继续扩展
+    534352: 'scroll',
+    5000: 'mantle',
+    169: 'manta',
+    34443: 'mode',
+    3776: 'berachain',
   };
   const chainSlug = chainSlugMap[chainId] || 'arbitrum';
 
@@ -78,7 +72,6 @@ export default async function handler(req, res) {
     let tokenOut = toTokenAddress;
     if (tokenIn === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenIn = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
     if (tokenOut === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') tokenOut = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-
     const kyberUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
     const kyberResponse = await fetch(kyberUrl, {
       headers: { 'x-client-id': 'RBS DApp' },
@@ -133,7 +126,31 @@ export default async function handler(req, res) {
     console.warn('Uniswap API quote failed');
   }
 
-  // 所有聚合器均失败，前端跳转 Uniswap 官网
+  // 层5: Jupiter Swap API (专为 Solana 链添加，支持您的 API Key)
+  if (chainId === 501) {  // SOLANA_CHAIN_ID = 501
+    try {
+      const jupiterUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=50`;
+      const jupiterResponse = await fetch(jupiterUrl, {
+        headers: {
+          'x-api-key': 'e1c7e499-23d0-493d-8d14-4fb62b1d595a',  // 您的 Jupiter API Key
+        },
+      });
+      const jupiterData = await jupiterResponse.json();
+      if (jupiterResponse.ok && jupiterData.outAmount) {
+        res.status(200).json({
+          toAmount: jupiterData.outAmount,
+          fromAmount: amount,
+          route: jupiterData,
+          aggregator: 'Jupiter',
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn('Jupiter quote failed:', err);
+    }
+  }
+
+  // 所有聚合器均失败
   res.status(404).json({ error: 'No route found from any aggregator' });
 }
 
