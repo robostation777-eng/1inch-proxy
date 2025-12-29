@@ -161,7 +161,6 @@ export default async function handler(req, res) {
     // 层5: Jupiter Swap API (专为 Solana 链添加，使用环境变量中的 API Key)
     if (!txData && chainId === 501) {
       try {
-        // 修正：使用官方 Quote 端点 /quote
         const slippageBps = Math.round(Number(slippage) * 100);
         const quoteUrl = `https://api.jup.ag/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${slippageBps}`;
         const quoteResponse = await fetch(quoteUrl, {
@@ -175,7 +174,6 @@ export default async function handler(req, res) {
         } else {
           const quoteData = await quoteResponse.json();
           if (quoteData.outAmount) {
-            // 修正：使用官方 Swap 端点 /swap (POST)
             const swapUrl = 'https://api.jup.ag/swap';
             const swapBody = {
               quoteResponse: quoteData,
