@@ -127,7 +127,7 @@ export default async function handler(req, res) {
     console.warn('Uniswap API quote failed');
   }
 
-  // 层5: Jupiter Quote API (修正端点为 /quote，使用环境变量 Key)
+  // 层5: Jupiter Quote API (专为 Solana 链添加，使用环境变量中的 API Key)
   if (chainId === 501) {
     try {
       const slippageBps = Math.round(Number(slippage) * 100);
