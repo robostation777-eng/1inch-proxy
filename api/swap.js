@@ -55,6 +55,7 @@ export default async function handler(req, res) {
     };
     const chainSlug = chainSlugMap[chainId] || 'arbitrum';
     let txData = null;
+
     // 层1: 1inch swap
     try {
       const params = new URLSearchParams();
@@ -79,6 +80,7 @@ export default async function handler(req, res) {
     } catch (err) {
       console.warn('1inch swap failed:', err.message);
     }
+
     // 层2: KyberSwap swap
     if (!txData) {
       try {
@@ -119,6 +121,7 @@ export default async function handler(req, res) {
         console.warn('KyberSwap swap failed:', err.message);
       }
     }
+
     // 层3: OpenOcean swap
     if (!txData) {
       try {
@@ -138,6 +141,7 @@ export default async function handler(req, res) {
         console.warn('OpenOcean swap failed:', err.message);
       }
     }
+
     // 层4: Uniswap API swap
     if (!txData) {
       try {
@@ -153,52 +157,66 @@ export default async function handler(req, res) {
         console.warn('Uniswap API swap failed:', err.message);
       }
     }
+
     // 层5: Jupiter Swap API (专为 Solana 链添加，使用环境变量中的 API Key)
     if (!txData && chainId === 501) {
       try {
-        // 先获取 quote 以确保路由存在
-        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${Math.round(Number(slippage) * 100)}`;
+        // 先获取 quote (修正端点为 /quote)
+        const slippageBps = Math.round(Number(slippage) * 100);
+        const quoteUrl = `https://api.jup.ag/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${slippageBps}`;
         const quoteResponse = await fetch(quoteUrl, {
           headers: {
-            'x-api-key': process.env.JUPITER_API_KEY, // ← 使用 Vercel 环境变量
+            'x-api-key': process.env.JUPITER_API_KEY,
           },
         });
-        const quoteData = await quoteResponse.json();
-        if (quoteResponse.ok && quoteData.outAmount) {
-          // 获取完整 swap 交易
-          const swapUrl = 'https://api.jup.ag/swap/v1/swap';
-          const swapBody = {
-            quoteResponse: quoteData,
-            userPublicKey: fromAddress,
-            wrapAndUnwrapSol: true,
-          };
-          const swapResponse = await fetch(swapUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': process.env.JUPITER_API_KEY, // ← 使用 Vercel 环境变量
-            },
-            body: JSON.stringify(swapBody),
-          });
-          const swapData = await swapResponse.json();
-          if (swapResponse.ok && swapData.swapTransaction) {
-            // Jupiter 返回 base64 序列化交易，前端需反序列化并签名
-            res.status(200).json({
-              tx: {
-                data: swapData.swapTransaction, // base64 字符串
-                to: null, // Solana 无固定 to 地址
-                value: '0',
+        if (!quoteResponse.ok) {
+          const errorText = await quoteResponse.text();
+          console.warn(`Jupiter quote failed with status ${quoteResponse.status}: ${errorText}`);
+        } else {
+          const quoteData = await quoteResponse.json();
+          if (quoteData.outAmount) {
+            // 获取完整 swap 交易
+            const swapUrl = 'https://api.jup.ag/swap';
+            const swapBody = {
+              quoteResponse: quoteData,
+              userPublicKey: fromAddress,
+              wrapAndUnwrapSol: true,
+            };
+            const swapResponse = await fetch(swapUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.JUPITER_API_KEY,
               },
-              aggregator: 'Jupiter',
-              jupiterSpecific: true, // 标记为 Jupiter，返回 base64
+              body: JSON.stringify(swapBody),
             });
-            return;
+            if (!swapResponse.ok) {
+              const errorText = await swapResponse.text();
+              console.warn(`Jupiter swap failed with status ${swapResponse.status}: ${errorText}`);
+            } else {
+              const swapData = await swapResponse.json();
+              if (swapData.swapTransaction) {
+                res.status(200).json({
+                  tx: {
+                    data: swapData.swapTransaction, // base64 字符串
+                    to: null,
+                    value: '0',
+                  },
+                  aggregator: 'Jupiter',
+                  jupiterSpecific: true,
+                });
+                return;
+              }
+            }
+          } else {
+            console.warn('Jupiter quote returned no outAmount:', quoteData);
           }
         }
       } catch (err) {
-        console.warn('Jupiter swap failed:', err.message);
+        console.warn('Jupiter swap exception:', err.message);
       }
     }
+
     // 所有聚合器失败
     res.status(404).json({ error: 'No swap route from any aggregator' });
   } catch (globalErr) {
