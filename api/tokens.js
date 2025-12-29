@@ -1,6 +1,5 @@
 // /api/tokens.js
-// Vercel Serverless Function：多源聚合代币列表，支持所有主流 EVM 链
-
+// Vercel Serverless Function：多源聚合代币列表，支持所有主流 EVM 链 + Solana
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -8,21 +7,17 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     return res.status(200).end();
   }
-
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
-
   const { chainId } = req.query;
-
   if (!chainId || !/^\d+$/.test(chainId)) {
     return res.status(400).json({ error: 'Invalid or missing chainId parameter' });
   }
-
   const numericChainId = parseInt(chainId, 10);
 
-  // 设置 CORS
+  // 设置 CORS 和缓存
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -32,18 +27,16 @@ export default async function handler(req, res) {
     // 层1: 优先使用 1inch 官方 API（覆盖最全、最准确）
     const oneInchUrl = `https://api.1inch.io/v5.2/${numericChainId}/tokens`;
     const oneInchResponse = await fetch(oneInchUrl, { next: { revalidate: 300 } });
-
     if (oneInchResponse.ok) {
       const data = await oneInchResponse.json();
       return res.status(200).json(data);
     }
-
     console.warn(`1inch API failed for chain ${numericChainId}, status: ${oneInchResponse.status}`);
   } catch (err) {
     console.warn(`1inch API request failed for chain ${numericChainId}:`, err.message);
   }
 
-  // 层2: Fallback 到 Coingecko 或其他公共列表（根据 chainId 映射知名列表）
+  // 层2: Fallback 到 Coingecko 或其他公共列表（EVM 链）
   try {
     const fallbackLists = {
       // Ethereum & L2s
@@ -64,18 +57,14 @@ export default async function handler(req, res) {
       // Fantom
       250: 'https://raw.githubusercontent.com/spookyswap/spooky-tokenlist/main/spooky.tokenlist.json',
     };
-
     const fallbackUrl = fallbackLists[numericChainId];
-
     if (fallbackUrl) {
       const fallbackResponse = await fetch(fallbackUrl);
       if (fallbackResponse.ok) {
         const listData = await fallbackResponse.json();
-
         // 转换为 1inch 兼容格式
         const tokens = {};
         const tokenArray = listData.tokens || listData;
-
         tokenArray.forEach(token => {
           if (token.chainId === numericChainId) {
             tokens[token.address.toLowerCase()] = {
@@ -87,12 +76,68 @@ export default async function handler(req, res) {
             };
           }
         });
-
         return res.status(200).json({ tokens });
       }
     }
   } catch (err) {
     console.warn(`Fallback token list failed for chain ${numericChainId}:`, err.message);
+  }
+
+  // 层3: Solana 专用代币列表（chainId === 501）
+  if (numericChainId === 501) {
+    const solanaTokens = {
+      "so11111111111111111111111111111111111111112": {
+        symbol: "SOL",
+        name: "Wrapped SOL",
+        address: "So11111111111111111111111111111111111111112",
+        decimals: 9,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+      },
+      "epjfwdd5aufqssqem2qn1xyzbyapc8g4weggkzwytdt1v": {
+        symbol: "USDC",
+        name: "USD Coin",
+        address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        decimals: 6,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png"
+      },
+      "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb": {
+        symbol: "USDT",
+        name: "Tether USD",
+        address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        decimals: 6,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png"
+      },
+      "jupyiwryjfskupiha juwua j3f5becv2h8f7vb2d6qgs": {
+        symbol: "JUP",
+        name: "Jupiter",
+        address: "JUPyiwrYJFskUPiHaJuWUAJ3f5BEcV2h8f7VB2d6QGs",
+        decimals: 6,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/JUPyiwrYJFskUPiHaJuWUAJ3f5BEcV2h8f7VB2d6QGs/logo.svg"
+      },
+      "dezxaz8z7pnrnjjz3wxborigixca6xjn b7yab1ppb263": {
+        symbol: "BONK",
+        name: "Bonk",
+        address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        decimals: 5,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263/logo.png"
+      },
+      "ekpqgsjtjmfqkz9kqansqyxr cf8fbopzlhyxdm65zcjm": {
+        symbol: "WIF",
+        name: "dogwifhat",
+        address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+        decimals: 6,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm/logo.png"
+      },
+      "hz1jovnivvgrgnii hyveozevgz58xau3rkwx8eacqbc": {
+        symbol: "PYTH",
+        name: "Pyth Network",
+        address: "HZ1JovNiVvGrGNiihYvEozEVgZ58XaU3RKwX8eACQBC",
+        decimals: 6,
+        logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/HZ1JovNiVvGrGNiihYvEozEVgZ58XaU3RKwX8eACQBC/logo.png"
+      },
+      // 如需添加更多热门代币，可继续扩展
+    };
+    return res.status(200).json({ tokens: solanaTokens });
   }
 
   // 最终 fallback：返回空列表（极少发生）
