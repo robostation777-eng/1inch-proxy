@@ -36,43 +36,26 @@ export default async function handler(req, res) {
   let responseData = null;
   let aggregator = 'Unknown';
 
-  // 层1: 1inch
+  // 优先级1: KyberSwap（支持 priceImpact）
   try {
-    const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
-    const inchResponse = await fetch(inchUrl, {
-      headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
-    });
-    const inchData = await inchResponse.json();
-    if (inchResponse.ok && inchData.toAmount) {
-      responseData = { toAmount: inchData.toAmount, fromAmount: amount };
-      aggregator = '1inch';
+    let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
+    let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
+    const kyberUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
+    const kyberResponse = await fetch(kyberUrl, { headers: { 'x-client-id': 'RBS DApp' } });
+    const kyberData = await kyberResponse.json();
+    if (kyberResponse.ok && kyberData.data?.routeSummary?.amountOut) {
+      responseData = {
+        toAmount: kyberData.data.routeSummary.amountOut,
+        fromAmount: amount,
+        priceImpact: kyberData.data.routeSummary.priceImpact || null,
+      };
+      aggregator = 'KyberSwap';
     }
   } catch (err) {
-    console.warn('1inch quote failed:', err.message);
+    console.warn('KyberSwap quote failed:', err.message);
   }
 
-  // 层2: KyberSwap
-  if (!responseData) {
-    try {
-      let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
-      let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
-      const kyberUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
-      const kyberResponse = await fetch(kyberUrl, { headers: { 'x-client-id': 'RBS DApp' } });
-      const kyberData = await kyberResponse.json();
-      if (kyberResponse.ok && kyberData.data?.routeSummary?.amountOut) {
-        responseData = {
-          toAmount: kyberData.data.routeSummary.amountOut,
-          fromAmount: amount,
-          priceImpact: kyberData.data.routeSummary.priceImpact || null, // KyberSwap 支持 priceImpact
-        };
-        aggregator = 'KyberSwap';
-      }
-    } catch (err) {
-      console.warn('KyberSwap quote failed:', err.message);
-    }
-  }
-
-  // 层3: OpenOcean
+  // 优先级2: OpenOcean（支持 price_impact）
   if (!responseData) {
     try {
       const openOceanUrl = `https://open-api.openocean.finance/v3/${chainSlug}/quote?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&gasPrice=5&slippage=100`;
@@ -82,7 +65,7 @@ export default async function handler(req, res) {
         responseData = {
           toAmount: openOceanData.data.outAmount,
           fromAmount: amount,
-          priceImpact: openOceanData.data.price_impact || null, // OpenOcean 返回 price_impact
+          priceImpact: openOceanData.data.price_impact ? parseFloat(openOceanData.data.price_impact) : null,
         };
         aggregator = 'OpenOcean';
       }
@@ -91,7 +74,24 @@ export default async function handler(req, res) {
     }
   }
 
-  // 层4: Uniswap API
+  // 优先级3: 1inch（高可靠性 fallback）
+  if (!responseData) {
+    try {
+      const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+      const inchResponse = await fetch(inchUrl, {
+        headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
+      });
+      const inchData = await inchResponse.json();
+      if (inchResponse.ok && inchData.toAmount) {
+        responseData = { toAmount: inchData.toAmount, fromAmount: amount };
+        aggregator = '1inch';
+      }
+    } catch (err) {
+      console.warn('1inch quote failed:', err.message);
+    }
+  }
+
+  // 优先级4: Uniswap API
   if (!responseData) {
     try {
       const uniswapUrl = `https://api.uniswap.org/v1/quote?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}`;
@@ -106,7 +106,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // 层5: Jupiter (仅 Solana)
+  // 优先级5: Jupiter (仅 Solana)
   if (!responseData && chainId === 501) {
     try {
       const slippageBps = Math.round(Number(slippage) * 100);
@@ -117,7 +117,7 @@ export default async function handler(req, res) {
         responseData = {
           toAmount: jupiterData.outAmount,
           fromAmount: amount,
-          priceImpact: jupiterData.priceImpactPct ? parseFloat(jupiterData.priceImpactPct) * 100 : null, // 转换为百分比
+          priceImpact: jupiterData.priceImpactPct ? parseFloat(jupiterData.priceImpactPct) * 100 : null,
         };
         aggregator = 'Jupiter';
       }
@@ -130,7 +130,7 @@ export default async function handler(req, res) {
     res.status(200).json({
       ...responseData,
       aggregator,
-      priceImpact: responseData.priceImpact || null, // 统一字段，便于前端直接使用
+      priceImpact: responseData.priceImpact || null,
     });
   } else {
     res.status(404).json({ error: 'No route found from any aggregator' });
