@@ -1,3 +1,4 @@
+// src/pages/api/swap.js
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -21,8 +22,8 @@ export default async function handler(req, res) {
       return Array.isArray(value) ? value[0]?.toString().trim() : value?.toString().trim();
     };
 
-    const fromTokenAddress = getParam('fromTokenAddress')?.toLowerCase() || '';
-    const toTokenAddress = getParam('toTokenAddress')?.toLowerCase() || '';
+    let fromTokenAddress = getParam('fromTokenAddress')?.toLowerCase() || '';
+    let toTokenAddress = getParam('toTokenAddress')?.toLowerCase() || '';
     const amount = getParam('amount') || '';
     const fromAddress = getParam('fromAddress') || '';
     const slippage = getParam('slippage') || '0.5';
@@ -30,6 +31,14 @@ export default async function handler(req, res) {
     if (!fromTokenAddress || !toTokenAddress || !amount || !fromAddress) {
       res.status(400).json({ error: 'Missing required parameters' });
       return;
+    }
+
+    // 统一处理 native 地址
+    if (fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+      fromTokenAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+    }
+    if (toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+      toTokenAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
     }
 
     const chainSlugMap = {
@@ -44,123 +53,129 @@ export default async function handler(req, res) {
     let txData = null;
     let aggregator = 'Unknown';
 
-    // 优先级1: KyberSwap
+    const fetchWithTimeout = (url, options = {}, timeout = 8000) => {
+      return Promise.race([
+        fetch(url, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+      ]);
+    };
+
+    // 优先并发尝试 KyberSwap 和 OpenOcean
     try {
-      let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
-      let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
-      const routeUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
-      const routeResponse = await fetch(routeUrl, { headers: { 'x-client-id': 'RBS DApp' } });
-      const routeData = await routeResponse.json();
-      if (routeResponse.ok && routeData.data?.routeSummary) {
+      const kyberPromise = (async () => {
+        const routeUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${fromTokenAddress}&tokenOut=${toTokenAddress}&amountIn=${amount}`;
+        const routeRes = await fetchWithTimeout(routeUrl, { headers: { 'x-client-id': 'RBS DApp' } });
+        if (!routeRes.ok) return null;
+        const routeData = await routeRes.json();
+        if (!routeData.data?.routeSummary) return null;
+
         const buildUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/route/build`;
-        const kyberSlippageBps = Math.round(Number(slippage) * 100);
-        const body = {
-          routeSummary: routeData.data.routeSummary,
-          sender: fromAddress,
-          recipient: fromAddress,
-          slippageTolerance: kyberSlippageBps,
-        };
-        const buildResponse = await fetch(buildUrl, {
+        const slippageBps = Math.round(Number(slippage) * 100);
+        const buildRes = await fetchWithTimeout(buildUrl, {
           method: 'POST',
           headers: { 'x-client-id': 'RBS DApp', 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            routeSummary: routeData.data.routeSummary,
+            sender: fromAddress,
+            recipient: fromAddress,
+            slippageTolerance: slippageBps,
+          }),
         });
-        const buildData = await buildResponse.json();
-        if (buildResponse.ok && buildData.data?.data) {
-          txData = {
-            to: routeData.data.routerAddress || '0x6131b5fae19ea4f9d964eac0408e4408b66337b5',
-            data: buildData.data.data,
-            value: buildData.data.value || '0',
-          };
-          aggregator = 'KyberSwap';
-        }
+        if (!buildRes.ok) return null;
+        const buildData = await buildRes.json();
+        if (!buildData.data?.data) return null;
+
+        return {
+          to: routeData.data.routerAddress || '0x6131b5fae19ea4f9d964eac0408e4408b66337b5',
+          data: buildData.data.data,
+          value: buildData.data.value || '0',
+          aggregator: 'KyberSwap',
+        };
+      })();
+
+      const openOceanPromise = (async () => {
+        const ooSlippage = Math.round(Number(slippage) * 100);
+        const ooUrl = `https://open-api.openocean.finance/v3/${chainSlug}/swap?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&slippage=${ooSlippage}&account=${fromAddress}&gasPrice=5`;
+        const ooRes = await fetchWithTimeout(ooUrl);
+        if (!ooRes.ok) return null;
+        const ooData = await ooRes.json();
+        if (!ooData.data?.data) return null;
+
+        return {
+          to: ooData.data.to,
+          data: ooData.data.data,
+          value: ooData.data.value || '0',
+          aggregator: 'OpenOcean',
+        };
+      })();
+
+      const [kyberResult, ooResult] = await Promise.allSettled([kyberPromise, openOceanPromise]);
+
+      if (kyberResult.status === 'fulfilled' && kyberResult.value) {
+        txData = { to: kyberResult.value.to, data: kyberResult.value.data, value: kyberResult.value.value };
+        aggregator = kyberResult.value.aggregator;
+      } else if (ooResult.status === 'fulfilled' && ooResult.value) {
+        txData = { to: ooResult.value.to, data: ooResult.value.data, value: ooResult.value.value };
+        aggregator = ooResult.value.aggregator;
       }
     } catch (err) {
-      console.warn('KyberSwap swap failed:', err.message);
+      console.warn('Primary aggregators failed:', err.message);
     }
 
-    // 优先级2: OpenOcean
-    if (!txData) {
-      try {
-        const openOceanUrl = `https://open-api.openocean.finance/v3/${chainSlug}/swap?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&slippage=${Math.round(Number(slippage) * 100)}&account=${fromAddress}&gasPrice=5`;
-        const openOceanResponse = await fetch(openOceanUrl);
-        const openOceanData = await openOceanResponse.json();
-        if (openOceanResponse.ok && openOceanData.data?.data) {
-          txData = {
-            to: openOceanData.data.to,
-            data: openOceanData.data.data,
-            value: openOceanData.data.value || '0',
-          };
-          aggregator = 'OpenOcean';
-        }
-      } catch (err) {
-        console.warn('OpenOcean swap failed:', err.message);
-      }
-    }
-
-    // 优先级3: 1inch
+    // Fallback: 1inch
     if (!txData) {
       try {
         const params = new URLSearchParams({
           fromTokenAddress, toTokenAddress, amount, fromAddress, slippage,
         });
         const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/swap?${params.toString()}`;
-        const inchResponse = await fetch(inchUrl, {
-          headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
+        const inchRes = await fetchWithTimeout(inchUrl, {
+          headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' }
         });
-        const inchData = await inchResponse.json();
-        if (inchResponse.ok && inchData.tx) {
-          txData = inchData.tx;
-          aggregator = '1inch';
+        if (inchRes.ok) {
+          const inchData = await inchRes.json();
+          if (inchData.tx) {
+            txData = inchData.tx;
+            aggregator = '1inch';
+          }
         }
       } catch (err) {
-        console.warn('1inch swap failed:', err.message);
+        console.warn('1inch fallback failed:', err.message);
       }
     }
 
-    // 优先级4: Uniswap API
-    if (!txData) {
-      try {
-        const uniswapUrl = `https://api.uniswap.org/v1/swap?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}&recipient=${fromAddress}&slippageTolerance=${slippage}`;
-        const uniswapResponse = await fetch(uniswapUrl);
-        const uniswapData = await uniswapResponse.json();
-        if (uniswapResponse.ok && uniswapData.tx) {
-          txData = uniswapData.tx;
-          aggregator = 'UniswapAPI';
-        }
-      } catch (err) {
-        console.warn('Uniswap API swap failed:', err.message);
-      }
-    }
+    // Fallback: Uniswap API (可选，视支持情况)
+    // if (!txData) { ... }
 
-    // 优先级5: Jupiter (仅 Solana)
+    // Solana: Jupiter
     if (!txData && chainId === 501) {
       try {
         const slippageBps = Math.round(Number(slippage) * 100);
         const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${slippageBps}`;
-        const quoteResponse = await fetch(quoteUrl);
-        const quoteData = await quoteResponse.json();
-        if (quoteResponse.ok && quoteData.outAmount) {
-          const swapUrl = 'https://quote-api.jup.ag/v6/swap';
-          const swapBody = {
+        const quoteRes = await fetchWithTimeout(quoteUrl);
+        if (!quoteRes.ok) throw new Error('Quote failed');
+        const quoteData = await quoteRes.json();
+
+        const swapUrl = 'https://quote-api.jup.ag/v6/swap';
+        const swapRes = await fetchWithTimeout(swapUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             quoteResponse: quoteData,
             userPublicKey: fromAddress,
             wrapAndUnwrapSol: true,
+          }),
+        });
+        if (!swapRes.ok) throw new Error('Swap build failed');
+        const swapData = await swapRes.json();
+
+        if (swapData.swapTransaction) {
+          txData = {
+            data: swapData.swapTransaction,
+            to: null,
+            value: '0',
           };
-          const swapResponse = await fetch(swapUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(swapBody),
-          });
-          const swapData = await swapResponse.json();
-          if (swapResponse.ok && swapData.swapTransaction) {
-            txData = {
-              data: swapData.swapTransaction,
-              to: null,
-              value: '0',
-            };
-            aggregator = 'Jupiter';
-          }
+          aggregator = 'Jupiter';
         }
       } catch (err) {
         console.warn('Jupiter swap failed:', err.message);
@@ -168,7 +183,11 @@ export default async function handler(req, res) {
     }
 
     if (txData) {
-      res.status(200).json({ tx: txData, aggregator, jupiterSpecific: aggregator === 'Jupiter' });
+      res.status(200).json({
+        tx: txData,
+        aggregator,
+        jupiterSpecific: aggregator === 'Jupiter',
+      });
     } else {
       res.status(404).json({ error: 'No swap route from any aggregator' });
     }
