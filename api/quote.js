@@ -1,3 +1,4 @@
+// src/pages/api/quote.js (或您的 handler 文件)
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -14,14 +15,22 @@ export default async function handler(req, res) {
   }
 
   const chainId = parseInt(req.query.chainId || '42161', 10);
-  const fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim().toLowerCase();
-  const toTokenAddress = (req.query.toTokenAddress || '').toString().trim().toLowerCase();
+  let fromTokenAddress = (req.query.fromTokenAddress || '').toString().trim().toLowerCase();
+  let toTokenAddress = (req.query.toTokenAddress || '').toString().trim().toLowerCase();
   const amount = (req.query.amount || '').toString().trim();
   const slippage = (req.query.slippage || '0.5').toString().trim();
 
   if (!fromTokenAddress || !toTokenAddress || !amount) {
     res.status(400).json({ error: 'Missing parameters' });
     return;
+  }
+
+  // 统一处理 native 地址
+  if (fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    fromTokenAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+  }
+  if (toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') {
+    toTokenAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
   }
 
   const chainSlugMap = {
@@ -36,101 +45,101 @@ export default async function handler(req, res) {
   let responseData = null;
   let aggregator = 'Unknown';
 
-  // 优先级1: KyberSwap（支持 priceImpact）
+  const fetchWithTimeout = (url, options = {}, timeout = 8000) => {
+    return Promise.race([
+      fetch(url, options),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+    ]);
+  };
+
+  // 优先并发尝试 KyberSwap 和 OpenOcean（更快、更准）
   try {
-    let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
-    let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
-    const kyberUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
-    const kyberResponse = await fetch(kyberUrl, { headers: { 'x-client-id': 'RBS DApp' } });
-    const kyberData = await kyberResponse.json();
-    if (kyberResponse.ok && kyberData.data?.routeSummary?.amountOut) {
-      responseData = {
-        toAmount: kyberData.data.routeSummary.amountOut,
-        fromAmount: amount,
-        priceImpact: kyberData.data.routeSummary.priceImpact || null,
-      };
-      aggregator = 'KyberSwap';
+    const [kyberPromise, openOceanPromise] = await Promise.allSettled([
+      fetchWithTimeout(`https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${fromTokenAddress}&tokenOut=${toTokenAddress}&amountIn=${amount}`, {
+        headers: { 'x-client-id': 'RBS DApp' }
+      }),
+      fetchWithTimeout(`https://open-api.openocean.finance/v3/${chainSlug}/quote?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&gasPrice=5&slippage=100`)
+    ]);
+
+    // KyberSwap 优先（priceImpact 更准）
+    if (kyberPromise.status === 'fulfilled') {
+      const kyberRes = kyberPromise.value;
+      if (kyberRes.ok) {
+        const kyberData = await kyberRes.json();
+        if (kyberData.data?.routeSummary?.amountOut) {
+          responseData = {
+            toAmount: kyberData.data.routeSummary.amountOut,
+            priceImpact: kyberData.data.routeSummary.priceImpact ? parseFloat(kyberData.data.routeSummary.priceImpact) : null,
+          };
+          aggregator = 'KyberSwap';
+        }
+      }
+    }
+
+    // OpenOcean 次选
+    if (!responseData && openOceanPromise.status === 'fulfilled') {
+      const openOceanRes = openOceanPromise.value;
+      if (openOceanRes.ok) {
+        const openOceanData = await openOceanRes.json();
+        if (openOceanData.data?.outAmount) {
+          responseData = {
+            toAmount: openOceanData.data.outAmount,
+            priceImpact: openOceanData.data.price_impact ? parseFloat(openOceanData.data.price_impact) : null,
+          };
+          aggregator = 'OpenOcean';
+        }
+      }
     }
   } catch (err) {
-    console.warn('KyberSwap quote failed:', err.message);
+    console.warn('Primary aggregators failed:', err.message);
   }
 
-  // 优先级2: OpenOcean（支持 price_impact）
-  if (!responseData) {
-    try {
-      const openOceanUrl = `https://open-api.openocean.finance/v3/${chainSlug}/quote?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&gasPrice=5&slippage=100`;
-      const openOceanResponse = await fetch(openOceanUrl);
-      const openOceanData = await openOceanResponse.json();
-      if (openOceanResponse.ok && openOceanData.data?.outAmount) {
-        responseData = {
-          toAmount: openOceanData.data.outAmount,
-          fromAmount: amount,
-          priceImpact: openOceanData.data.price_impact ? parseFloat(openOceanData.data.price_impact) : null,
-        };
-        aggregator = 'OpenOcean';
-      }
-    } catch (err) {
-      console.warn('OpenOcean quote failed:', err.message);
-    }
-  }
-
-  // 优先级3: 1inch（高可靠性 fallback）
+  // Fallback 链
   if (!responseData) {
     try {
       const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
-      const inchResponse = await fetch(inchUrl, {
-        headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
+      const inchRes = await fetchWithTimeout(inchUrl, {
+        headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' }
       });
-      const inchData = await inchResponse.json();
-      if (inchResponse.ok && inchData.toAmount) {
-        responseData = { toAmount: inchData.toAmount, fromAmount: amount };
-        aggregator = '1inch';
+      if (inchRes.ok) {
+        const inchData = await inchRes.json();
+        if (inchData.toAmount) {
+          responseData = { toAmount: inchData.toAmount };
+          aggregator = '1inch';
+        }
       }
     } catch (err) {
-      console.warn('1inch quote failed:', err.message);
+      console.warn('1inch fallback failed:', err.message);
     }
   }
 
-  // 优先级4: Uniswap API
-  if (!responseData) {
-    try {
-      const uniswapUrl = `https://api.uniswap.org/v1/quote?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}`;
-      const uniswapResponse = await fetch(uniswapUrl);
-      const uniswapData = await uniswapResponse.json();
-      if (uniswapResponse.ok && uniswapData.quote) {
-        responseData = { toAmount: uniswapData.quote, fromAmount: amount };
-        aggregator = 'UniswapAPI';
-      }
-    } catch (err) {
-      console.warn('Uniswap API quote failed:', err.message);
-    }
-  }
-
-  // 优先级5: Jupiter (仅 Solana)
+  // Solana 特殊处理
   if (!responseData && chainId === 501) {
     try {
       const slippageBps = Math.round(Number(slippage) * 100);
       const jupiterUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${fromTokenAddress}&outputMint=${toTokenAddress}&amount=${amount}&slippageBps=${slippageBps}`;
-      const jupiterResponse = await fetch(jupiterUrl);
-      const jupiterData = await jupiterResponse.json();
-      if (jupiterResponse.ok && jupiterData.outAmount) {
-        responseData = {
-          toAmount: jupiterData.outAmount,
-          fromAmount: amount,
-          priceImpact: jupiterData.priceImpactPct ? parseFloat(jupiterData.priceImpactPct) * 100 : null,
-        };
-        aggregator = 'Jupiter';
+      const jupiterRes = await fetchWithTimeout(jupiterUrl);
+      if (jupiterRes.ok) {
+        const jupiterData = await jupiterRes.json();
+        if (jupiterData.outAmount) {
+          responseData = {
+            toAmount: jupiterData.outAmount,
+            priceImpact: jupiterData.priceImpactPct ? parseFloat(jupiterData.priceImpactPct) * 100 : null,
+          };
+          aggregator = 'Jupiter';
+        }
       }
     } catch (err) {
-      console.warn('Jupiter quote failed:', err.message);
+      console.warn('Jupiter failed:', err.message);
     }
   }
 
   if (responseData) {
     res.status(200).json({
-      ...responseData,
-      aggregator,
+      toAmount: responseData.toAmount,
+      fromAmount: amount,
       priceImpact: responseData.priceImpact || null,
+      aggregator,
     });
   } else {
     res.status(404).json({ error: 'No route found from any aggregator' });
