@@ -44,62 +44,42 @@ export default async function handler(req, res) {
     let txData = null;
     let aggregator = 'Unknown';
 
-    // 层1: 1inch
+    // 优先级1: KyberSwap
     try {
-      const params = new URLSearchParams({
-        fromTokenAddress, toTokenAddress, amount, fromAddress, slippage,
-      });
-      const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/swap?${params.toString()}`;
-      const inchResponse = await fetch(inchUrl, {
-        headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
-      });
-      const inchData = await inchResponse.json();
-      if (inchResponse.ok && inchData.tx) {
-        txData = inchData.tx;
-        aggregator = '1inch';
+      let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
+      let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
+      const routeUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
+      const routeResponse = await fetch(routeUrl, { headers: { 'x-client-id': 'RBS DApp' } });
+      const routeData = await routeResponse.json();
+      if (routeResponse.ok && routeData.data?.routeSummary) {
+        const buildUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/route/build`;
+        const kyberSlippageBps = Math.round(Number(slippage) * 100);
+        const body = {
+          routeSummary: routeData.data.routeSummary,
+          sender: fromAddress,
+          recipient: fromAddress,
+          slippageTolerance: kyberSlippageBps,
+        };
+        const buildResponse = await fetch(buildUrl, {
+          method: 'POST',
+          headers: { 'x-client-id': 'RBS DApp', 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const buildData = await buildResponse.json();
+        if (buildResponse.ok && buildData.data?.data) {
+          txData = {
+            to: routeData.data.routerAddress || '0x6131b5fae19ea4f9d964eac0408e4408b66337b5',
+            data: buildData.data.data,
+            value: buildData.data.value || '0',
+          };
+          aggregator = 'KyberSwap';
+        }
       }
     } catch (err) {
-      console.warn('1inch swap failed:', err.message);
+      console.warn('KyberSwap swap failed:', err.message);
     }
 
-    // 层2: KyberSwap
-    if (!txData) {
-      try {
-        let tokenIn = fromTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : fromTokenAddress;
-        let tokenOut = toTokenAddress === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ? '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' : toTokenAddress;
-        const routeUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/routes?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amount}`;
-        const routeResponse = await fetch(routeUrl, { headers: { 'x-client-id': 'RBS DApp' } });
-        const routeData = await routeResponse.json();
-        if (routeResponse.ok && routeData.data?.routeSummary) {
-          const buildUrl = `https://aggregator-api.kyberswap.com/${chainSlug}/api/v1/route/build`;
-          const kyberSlippageBps = Math.round(Number(slippage) * 100);
-          const body = {
-            routeSummary: routeData.data.routeSummary,
-            sender: fromAddress,
-            recipient: fromAddress,
-            slippageTolerance: kyberSlippageBps,
-          };
-          const buildResponse = await fetch(buildUrl, {
-            method: 'POST',
-            headers: { 'x-client-id': 'RBS DApp', 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          const buildData = await buildResponse.json();
-          if (buildResponse.ok && buildData.data?.data) {
-            txData = {
-              to: routeData.data.routerAddress || '0x6131b5fae19ea4f9d964eac0408e4408b66337b5',
-              data: buildData.data.data,
-              value: buildData.data.value || '0',
-            };
-            aggregator = 'KyberSwap';
-          }
-        }
-      } catch (err) {
-        console.warn('KyberSwap swap failed:', err.message);
-      }
-    }
-
-    // 层3: OpenOcean
+    // 优先级2: OpenOcean
     if (!txData) {
       try {
         const openOceanUrl = `https://open-api.openocean.finance/v3/${chainSlug}/swap?inTokenAddress=${fromTokenAddress}&outTokenAddress=${toTokenAddress}&amount=${amount}&slippage=${Math.round(Number(slippage) * 100)}&account=${fromAddress}&gasPrice=5`;
@@ -118,7 +98,27 @@ export default async function handler(req, res) {
       }
     }
 
-    // 层4: Uniswap API
+    // 优先级3: 1inch
+    if (!txData) {
+      try {
+        const params = new URLSearchParams({
+          fromTokenAddress, toTokenAddress, amount, fromAddress, slippage,
+        });
+        const inchUrl = `https://api.1inch.dev/swap/v6.1/${chainId}/swap?${params.toString()}`;
+        const inchResponse = await fetch(inchUrl, {
+          headers: { Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`, Accept: 'application/json' },
+        });
+        const inchData = await inchResponse.json();
+        if (inchResponse.ok && inchData.tx) {
+          txData = inchData.tx;
+          aggregator = '1inch';
+        }
+      } catch (err) {
+        console.warn('1inch swap failed:', err.message);
+      }
+    }
+
+    // 优先级4: Uniswap API
     if (!txData) {
       try {
         const uniswapUrl = `https://api.uniswap.org/v1/swap?chainId=${chainId}&tokenInAddress=${fromTokenAddress}&tokenOutAddress=${toTokenAddress}&amount=${amount}&recipient=${fromAddress}&slippageTolerance=${slippage}`;
@@ -133,7 +133,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 层5: Jupiter (仅 Solana)
+    // 优先级5: Jupiter (仅 Solana)
     if (!txData && chainId === 501) {
       try {
         const slippageBps = Math.round(Number(slippage) * 100);
